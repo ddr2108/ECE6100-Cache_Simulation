@@ -9,6 +9,7 @@
 void prefetch(uint64_t, cache_stats_t*);
 int checkL1(uint64_t, cache_stats_t*, int);
 int checkL2(uint64_t, cache_stats_t*, int);
+int checkCache(uint64_t, cache_stats_t*, int, int);
 void addToCache(uint64_t, cache_stats_t*, int, int);
 
 //Cache pieces
@@ -20,7 +21,6 @@ uint64_t* tagC2;		//Store Tags
 long long* ageC2;			//Store age via timestamps
 int* validC2;			//Information bits
 int* dirtyC2;
-
 //Cache stats
 uint64_t c1;
 uint64_t b1;
@@ -29,7 +29,6 @@ uint64_t c2;
 uint64_t b2;
 uint64_t s2;
 uint32_t k;
-
 //Variables for prefetching
 uint64_t prev_miss = -1;
 uint64_t pending_stride = -1;
@@ -174,103 +173,100 @@ void prefetch(uint64_t address, cache_stats_t* p_stats){
 
 
 }
-
 /**
- * Subroutine that looks through L1 cache.
+ * Subroutine that looks through caches.
  *
  * @address  The target memory address
  * @p_stats Pointer to the statistics structure
  * @rw The type of event. Either READ or WRITE
+ * @cache The cache. Either L1 or L2
  *
  * @return 1 if hit, 0 if not
  */
-int checkL1(uint64_t address, cache_stats_t* p_stats, int rw) {
+int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 	int i;
 	//Flag for hit
 	int hit = 0;
-	//L1 parameters
-	uint64_t indexForC1 = (address>>b1)&(uint64_t(pow(2,c1-b1-s1)-1));		//Index into cache
-	uint64_t tagForC1 = address>>(c1-s1);									//Tag for cache
-	uint64_t incrementC1 = pow(2,c1-b1-s1);									//Increment between items in same set
+	//Cache parameters
+	int c,b,s;
+	uint64_t* tag;
+	long long* age;	
+	int* valid, *dirty;
+	//Address parameters
+	uint64_t indexC;					//Index into cache
+	uint64_t tagC;						//Tag for cache
+	uint64_t incrementC;				//Increment between items in same set
 	//Struct for time stamps
 	struct timeval tv;
 
-	p_stats->L1_accesses++;			//Update stats
+	//Adjust cache parameters based on the cache
+	if (cache==L1){
+		c = c1;
+		b = b1;
+		s = s1;
+		valid = validC1;
+		dirty = dirtyC1;
+		age = ageC1;
+		tag = tagC1;
+	} else{
+		c = c2;
+		b = b2;
+		s = s2;
+		valid = validC2;
+		dirty = dirtyC2;
+		age = ageC2;
+		tag = tagC2;
+	}
 
-	// Check L1 cache - go through each in set
-	for (i=0; i<pow(2,s1); i++){
+	//Determine address parameters
+	indexC = (address>>b)&(uint64_t(pow(2,c-b-s)-1));		//Index into cache
+	tagC = address>>(c-s);									//Tag for cache
+	incrementC = pow(2,c-b-s);								//Increment between items in same set
+
+	// Check cache - go through each in set
+	for (i=0; i<pow(2,s); i++){
 		//Check for valid tag and valididty
-		if (tagC1[indexForC1 + incrementC1*i] == tagForC1 && validC1[indexForC1 + incrementC1*i] == 1){
-			hit = 1;			//if found, mark as a hit
+		if (tag[indexC + incrementC*i] == tagC && valid[indexC + incrementC*i] == 1){
+			//Adjust value of hit based on which cache missed
+			if (cache==L1){
+				hit = 1;
+			}else if (cache==L2){
+				hit = 2;
+			}
 
 			//Set up timestamp
 			gettimeofday(&tv,NULL);
-			ageC1[indexForC1 + incrementC1*i]  = tv.tv_sec*1000000+tv.tv_usec;
+			age[indexC + incrementC*i]  = tv.tv_sec*1000000+tv.tv_usec;
 
 			//Change dirty bit based on read or write
 			if (rw == WRITE){
-				dirtyC1[indexForC1 + incrementC1*i]=1;		//Mark as dirty
+				dirty[indexC + incrementC*i]=1;		//Mark as dirty
 			}else{
-				dirtyC1[indexForC1 + incrementC1*i]=0;		//Mark as not dirty				
+				dirty[indexC + incrementC*i]=0;		//Mark as not dirty				
 			}
 			
 			break;		//break if found
 		}
 	}
 
-	return hit;		//return whether there was a hit
-}
-
-/**
- * Subroutine that looks through L2 cache.
- *
- * @address  The target memory address
- * @p_stats Pointer to the statistics structure
- * @rw The type of event. Either READ or WRITE
- *
- * @return 1 if hit, 0 if not
- */
-int checkL2(uint64_t address, cache_stats_t* p_stats, int rw) {
-	int i;
-	//Flag for hit
-	int hit = 0;
-	//L2 parameters
-	uint64_t indexForC2 = (address>>b2)&(uint64_t(pow(2,c2-b2-s2)-1));		//Index into cache
-	uint64_t tagForC2 = address>>(c2-s2);									//Tag for cache
-	uint64_t incrementC2 = pow(2,c2-b2-s2);									//Increment between items in same set
-	//Struct for time stamps
-	struct timeval tv;
-
-	//Update stats
-	p_stats->L2_accesses++;			
-	if (rw == WRITE){
-		p_stats->L1_write_misses++;
-	}else{
+	//Update access stats
+	if (cache==L1){
+		p_stats->L1_accesses++;
+	}else if (cache==L2){
+		p_stats->L2_accesses++;
+	}
+	//Update misses stats
+	if (cache == L1 && rw==READ && hit == 0){
 		p_stats->L1_read_misses++;
+	}else if (cache == L2 && rw==READ && hit == 0){
+		p_stats->L2_read_misses++;
+	} else if (cache == L1 && rw==WRITE && hit == 0){
+		p_stats->L1_write_misses++;
+	}else if (cache == L2 && rw==WRITE && hit == 0){
+		p_stats->L2_write_misses++;
 	}
 
-	//Check L2 cache - go through each in set
-	for (i=0; i<pow(2,s2); i++){
-		//Check for valid tag and valididty
-		if (tagC2[indexForC2 + incrementC2*i] == tagForC2 && validC2[indexForC2 + incrementC2*i] == 1){
-			hit = 2;			//if found, mark as a hit
-
-			//Set up timestamp
-			gettimeofday(&tv,NULL);
-			ageC2[indexForC2 + incrementC2*i]  = tv.tv_sec*1000000+tv.tv_usec;
-				
-			//Change dirty bit based on read or write
-			if (rw == WRITE){
-				dirtyC2[indexForC2 + incrementC2*i]=1;		//Mark as dirty
-			}else{
-				dirtyC2[indexForC2 + incrementC2*i]=0;		//Mark as not dirty
-			}
-
-			break;		//break if found
-		}
-	}
-
-	return hit;
+	return hit;		//return whether there was a hit
 }
 
 /**
@@ -293,8 +289,9 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache){
 	uint64_t tagC;						//Tag for cache
 	uint64_t incrementC;				//Increment between items in same set
 	//Cache Access
-	int indexOld;			//LRU 
+	int indexOld;				//LRU 
 	int brought = 0;			//Flag for bringin into cache
+	int indexAdded;
 	//Struct for time stamps
 	struct timeval tv;
 
@@ -330,21 +327,8 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache){
 		if (valid[indexC + incrementC*i] == 0){
 			brought = 1;			//if found, mark as a hit
 
-			//Set up timestamp
-			gettimeofday(&tv,NULL);
-			age[indexC + incrementC*i]  = tv.tv_sec*1000000+tv.tv_usec;
-
-			//Set up valid bit
-			valid[indexC + incrementC*i] = 1;
-			//Change dirty bit based on read or write
-			if (rw == WRITE){
-				dirty[indexC + incrementC*i] = 1;
-			}else{
-				dirty[indexC + incrementC*i] = 0;
-			}
-
-			//Put tag into cache
-			tag[indexC + incrementC*i] = tagC;
+			//Index added to
+			indexAdded = indexC + incrementC*i;
 				
 			break;
 		}
@@ -365,31 +349,25 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache){
 			p_stats->write_backs++;
 		}
 
-		//Set up timestamp
-		gettimeofday(&tv,NULL);
-		age[indexOld]  = tv.tv_sec*1000000+tv.tv_usec;
+		//Index to add to
+		indexAdded = indexOld;
 
-		//Set up valid bit
-		valid[indexOld] = 1;
-		//Change dirty bit based on read or write
-		if (rw == WRITE){
-			dirty[indexOld] = 1;
-		}else{
-			dirty[indexOld] = 0;
-		}
-
-		//Put tag into cache
-		tag[indexOld] = tagC;
 	}
 
-	//Update stats
-	if (rw==READ && cache==L2){
-		p_stats->L2_read_misses++;		//update stats
-	}else if (rw==WRITE && cache==L2){
-		p_stats->L2_write_misses++;		//update stats
+	//Set up data for added item
+	//Set up timestamp
+	gettimeofday(&tv,NULL);
+	age[indexAdded]  = tv.tv_sec*1000000+tv.tv_usec;
+	//Set up valid bit
+	valid[indexAdded] = 1;
+	//Change dirty bit based on read or write
+	if (rw == WRITE){
+		dirty[indexAdded] = 1;
+	}else{
+		dirty[indexAdded] = 0;
 	}
-
-
+	//Put tag into cache
+	tag[indexAdded] = tagC;
 }
 
 /**
@@ -412,10 +390,10 @@ void cache_access(char rw, uint64_t address, cache_stats_t* p_stats) {
 	}
 
 	//Check if address in L1 cache
-	hit = checkL1(address, p_stats, rw);
+	hit = checkCache(address, p_stats, rw, L1);
 	//If there is no hit check L2 cache
 	if (hit == 0){
-		hit = checkL2(address, p_stats, rw);
+		hit = checkCache(address, p_stats, rw, L2);
 	}
 
 	//If there is a miss in the caches
