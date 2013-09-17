@@ -6,8 +6,6 @@
 
 
 //Functions for interacting with cache
-void cache_read(uint64_t, cache_stats_t*);
-void cache_write(uint64_t, cache_stats_t*);
 void prefetch(uint64_t, cache_stats_t*);
 int checkL1(uint64_t, cache_stats_t*, int);
 int checkL2(uint64_t, cache_stats_t*, int);
@@ -37,8 +35,8 @@ uint64_t prev_miss = -1;
 uint64_t pending_stride = -1;
 
 //Cache action
-#define READ  0
-#define WRITE 1
+#define READ  'r'
+#define WRITE 'w'
 //Which cache
 #define L1  1
 #define L2  2
@@ -176,74 +174,6 @@ void prefetch(uint64_t address, cache_stats_t* p_stats){
 
 
 }
-
-/**
- * Subroutine that actually reads from cache.
- *
- * @address  The target memory address
- * @p_stats Pointer to the statistics structure
- */
-void cache_read(uint64_t address, cache_stats_t* p_stats){
-	int hit = 0;			//flag for hits
-
-	//Check L1 Cache
-	hit = checkL1(address, p_stats, READ);
-	//If there is no hit check L2 cache
-	if (hit == 0){
-		hit = checkL2(address, p_stats, READ);
-	}
-
-	//If there wasn't a hit in either cache, pull into cache
-	if (hit != 1){
-		//Add to L1 cache if miss in L1
-		addToCache(address, p_stats, READ, L1);
-	
-		if (hit==0){
-			p_stats->L2_read_misses++;		//update stats
-
-			//Add to L2 cache if miss in both cache
-			addToCache(address, p_stats, READ, L2);
-
-			prefetch(address, p_stats);
-		}
-
-	}
-
-}
-
-/**
- * Subroutine that actually writes to cache.
- *
- * @address  The target memory address
- * @p_stats Pointer to the statistics structure
- */
-void cache_write(uint64_t address, cache_stats_t* p_stats){
-	int hit = 0;			//flag for hits
-
-	hit = checkL1(address, p_stats, WRITE);
-
-	//If there is no hit check L2 cache
-	if (hit == 0){
-		hit = checkL2(address, p_stats, WRITE);
-	}
-
-	//If there wasn't a hit in either cache, pull into cache
-	if (hit != 1){
-		//Add to L1 cache if miss in L1
-		addToCache(address, p_stats, READ, L1);
-
-		
-		if (hit==0){
-			p_stats->L2_write_misses++;		//update stats
-
-			//Add to L2 cache if miss in both cache
-			addToCache(address, p_stats, WRITE, L2);
-
-			prefetch(address, p_stats);
-		}
-	}
-}
-
 
 /**
  * Subroutine that looks through L1 cache.
@@ -452,6 +382,14 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache){
 		tag[indexOld] = tagC;
 	}
 
+	//Update stats
+	if (rw==READ && cache==L2){
+		p_stats->L2_read_misses++;		//update stats
+	}else if (rw==WRITE && cache==L2){
+		p_stats->L2_write_misses++;		//update stats
+	}
+
+
 }
 
 /**
@@ -462,18 +400,37 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache){
  * @p_stats Pointer to the statistics structure
  */
 void cache_access(char rw, uint64_t address, cache_stats_t* p_stats) {
+	int hit = 0;			//flag for hits
 
+	//Increment number of accesses
+	p_stats->accesses++;		
 	//Check if read or write was done
-	if (rw=='r'){
+	if (rw==READ){
 		p_stats->reads++;
-		cache_read(address, p_stats);
 	}else{
 		p_stats->writes++;
-		cache_write(address, p_stats);
 	}
 
-	p_stats->accesses++;		//Increment number of accesses
+	//Check if address in L1 cache
+	hit = checkL1(address, p_stats, rw);
+	//If there is no hit check L2 cache
+	if (hit == 0){
+		hit = checkL2(address, p_stats, rw);
+	}
 
+	//If there is a miss in the caches
+	if (hit != 1){
+		//Add to L1 cache
+		addToCache(address, p_stats, rw, L1);
+		//If miss in L2 cache
+		if (hit==0){
+			//Add to L2 cache if miss in both cache
+			addToCache(address, p_stats, rw, L2);
+
+			//Prefetch anything else
+			prefetch(address, p_stats);
+		}
+	}
 }
 
 
@@ -484,12 +441,10 @@ void cache_access(char rw, uint64_t address, cache_stats_t* p_stats) {
  * @p_stats Pointer to the statistics structure
  */
 void complete_cache(cache_stats_t *p_stats) {
-	double HT1 = 0;			//Variables for AAT
-	double HT2 = 0;
+	double HT1, HT2 = 0;			//Variables for AAT
 	double MP1 = 0;
 	double MP2 = 500.0;
-	double MR1 = 0;
-	double MR2 = 0;
+	double MR1, MR2 = 0;
 
 	//Free memory associated with L1 cache
 	free(tagC1);
