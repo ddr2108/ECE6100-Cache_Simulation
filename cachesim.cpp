@@ -2,6 +2,7 @@
 #include <sys/time.h>
 #include <math.h>
 #include "cachesim.hpp"
+#include <stdio.h>
 
 //Functions for interacting with cache
 void prefetchCache(uint64_t, cache_stats_t*);
@@ -32,6 +33,9 @@ uint64_t pending_stride = -1;
 //Prefectch
 #define NO_PREFETCH  0
 #define PREFETCH     1
+
+//int L1miss = 0;
+//int L2miss = 0;
 
 /**
  * Subroutine for initializing the cache. You many add and initialize any global or heap
@@ -117,7 +121,6 @@ void cache_access(char rw, uint64_t address, cache_stats_t* p_stats) {
 		if (hit==0){
 			//Add to L2 cache if miss in both cache
 			addToCache(address, p_stats, rw, L2, NO_PREFETCH);
-
 			//Prefetch anything else
 			prefetchCache(address, p_stats);
 		}
@@ -154,6 +157,8 @@ void complete_cache(cache_stats_t *p_stats) {
 	HT2 = 4 + 0.4*s2;
 	MP1 = HT2 + MR2*MP2;
 	p_stats->avg_access_time = HT1 + MR1 * MP1;
+
+	//printf("%d %d\n", L1miss, L2miss);
 }
 
 /**
@@ -256,6 +261,7 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 			prefetchC2[indexFound]=0;
 		}
 	}
+
 	return hit;		//return whether there was a hit
 }
 
@@ -335,7 +341,7 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache, int
 		}
 
 		//Look for the oldest item in case of removing LRU
-		if (age[indexC + incrementC*i] < age[indexOld]){
+		if (age[indexC + incrementC*i] < age[indexOld] && valid[indexC + incrementC*i] == 1){
 			indexOld = indexC + incrementC*i;
 		}
 	}
@@ -343,12 +349,17 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache, int
 	//If all items valid, removed LRU
 	if (brought == 0){
 		brought = 1;					//set flag that brough in
-		//Check if need to do writeback
-		if (dirty[indexOld] == 1){
-			p_stats->write_backs++;
-		}
 		//Index to add to
 		indexAdded = indexOld;
+		//Check if need to do writeback
+		if (dirty[indexAdded] == 1){
+			//p_stats->write_backs++;
+			if (cache==L1){
+				//L1miss++;
+			}else if (cache==L2){
+				p_stats->write_backs++;
+			}
+		}
 	}
 
 	//Set up data for added item
