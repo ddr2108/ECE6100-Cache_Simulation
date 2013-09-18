@@ -1,31 +1,23 @@
-#include "cachesim.hpp"
 #include <stdlib.h>
-#include <cstdio>
-#include <math.h>
 #include <sys/time.h>
-
+#include <math.h>
+#include "cachesim.hpp"
 
 //Functions for interacting with cache
-void prefetch(uint64_t, cache_stats_t*);
+void prefetchCache(uint64_t, cache_stats_t*);
 int checkCache(uint64_t, cache_stats_t*, int, int);
 void addToCache(uint64_t, cache_stats_t*, int, int, int);
 
 //Cache pieces
-uint64_t* tagC1;		//Store Tags 
-long long* ageC1;			//Store age via timestamps
-int* validC1;			//Information bits
-int* dirtyC1;
-uint64_t* tagC2;		//Store Tags 
-long long* ageC2;			//Store age via timestamps
-int* validC2;			//Information bits
-int* dirtyC2;
+uint64_t *tagC1, *tagC2;		//Store Tags 
+long long *ageC1, *ageC2;		//Store age via timestamps
+int *validC1, *validC2;			//Information bits
+int *dirtyC1, *dirtyC2;
+int *prefetchC2;				//Prefetch info
 //Cache stats
-uint64_t c1;
-uint64_t b1;
-uint64_t s1;
-uint64_t c2;
-uint64_t b2;
-uint64_t s2;
+uint64_t c1, c2;
+uint64_t b1, b2;
+uint64_t s1, s2;
 uint32_t k;
 //Variables for prefetching
 uint64_t prev_miss = -1;
@@ -75,14 +67,18 @@ void setup_cache(uint64_t in_c1, uint64_t in_b1, uint64_t in_s1, uint64_t in_c2,
 	ageC2 = (long long*) malloc((int)pow(2,(c2-b2))*sizeof(long long));
 	validC2 = (int*) malloc((int)pow(2,(c2-b2))*sizeof(int));
 	dirtyC2 = (int*) malloc((int)pow(2,(c2-b2))*sizeof(int));
+	prefetchC2 = (int*) malloc((int)pow(2,(c2-b2))*sizeof(int));
 
 
-	//Initialize valid bits to 0
+	//Initialize bits to 0
 	for (i = 0; i<(int)pow(2,(c1-b1)); i++){
+		dirtyC1[i] = 0;
 		validC1[i] = 0;
 	}
 	for (i = 0; i<(int)pow(2,(c2-b2)); i++){
+		dirtyC2[i] = 0;
 		validC2[i] = 0;
+		prefetchC2[i] = 0;
 	}
 
 }
@@ -123,7 +119,7 @@ void cache_access(char rw, uint64_t address, cache_stats_t* p_stats) {
 			addToCache(address, p_stats, rw, L2, NO_PREFETCH);
 
 			//Prefetch anything else
-			prefetch(address, p_stats);
+			prefetchCache(address, p_stats);
 		}
 	}
 }
@@ -172,6 +168,7 @@ void complete_cache(cache_stats_t *p_stats) {
  */
 int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 	int i;
+	int indexFound;
 	//Flag for hit
 	int hit = 0;
 	//Cache parameters
@@ -220,15 +217,16 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 			}else if (cache==L2){
 				hit = 2;
 			}
+			//Index found at
+			indexFound = indexC + incrementC*i;
+
 			//Set up timestamp
 			gettimeofday(&tv,NULL);
-			age[indexC + incrementC*i]  = tv.tv_sec*1000000+tv.tv_usec;
+			age[indexFound]  = tv.tv_sec*1000000+tv.tv_usec;
 			//Change dirty bit based on read or write
 			if (rw == WRITE){
-				dirty[indexC + incrementC*i]=1;		//Mark as dirty
-			}else{
-				dirty[indexC + incrementC*i]=0;		//Mark as not dirty				
-			}	
+				dirty[indexFound]=1;		//Mark as dirty
+			}
 			break;		//break if found
 		}
 	}
@@ -249,7 +247,15 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 	}else if (cache == L2 && rw==WRITE && hit == 0){
 		p_stats->L2_write_misses++;
 	}
-
+	//Update prefetch stats
+	if (hit==2){
+		//If it was a prefetched item
+		if (prefetchC2[indexFound]==1){
+			p_stats->successful_prefetches++;
+			//No longer prefetched item
+			prefetchC2[indexFound]=0;
+		}
+	}
 	return hit;		//return whether there was a hit
 }
 
@@ -365,6 +371,12 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache, int
 	}
 	//Put tag into cache
 	tag[indexAdded] = tagC;
+	//Set up prefetch info
+	if (prefetch == PREFETCH){
+		prefetchC2[indexAdded] = 1;
+	}else if (cache==L2){
+		prefetchC2[indexAdded] = 0;		
+	}
 }
 
 /**
@@ -373,7 +385,7 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache, int
  * @address  The target memory address
  * @p_stats Pointer to the statistics structure
  */
-void prefetch(uint64_t address, cache_stats_t* p_stats){
+void prefetchCache(uint64_t address, cache_stats_t* p_stats){
 	int i = 0;
 	int64_t d = 0;		//stride between misses
 
