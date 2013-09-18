@@ -40,6 +40,7 @@ uint64_t pending_stride = -1;
 //Prefectch
 #define NO_PREFETCH  0
 #define PREFETCH     1
+
 /**
  * Subroutine for initializing the cache. You many add and initialize any global or heap
  * variables as needed.
@@ -84,6 +85,79 @@ void setup_cache(uint64_t in_c1, uint64_t in_b1, uint64_t in_s1, uint64_t in_c2,
 		validC2[i] = 0;
 	}
 
+}
+
+/**
+ * Subroutine that simulates the cache one trace event at a time.
+ *
+ * @rw The type of event. Either READ or WRITE
+ * @address  The target memory address
+ * @p_stats Pointer to the statistics structure
+ */
+void cache_access(char rw, uint64_t address, cache_stats_t* p_stats) {
+	int hit = 0;			//flag for hits
+
+	//Increment number of accesses
+	p_stats->accesses++;		
+	//Check if read or write was done
+	if (rw==READ){
+		p_stats->reads++;
+	}else{
+		p_stats->writes++;
+	}
+
+	//Check if address in L1 cache
+	hit = checkCache(address, p_stats, rw, L1);
+	//If there is no hit check L2 cache
+	if (hit == 0){
+		hit = checkCache(address, p_stats, rw, L2);
+	}
+
+	//If there is a miss in the caches
+	if (hit != 1){
+		//Add to L1 cache
+		addToCache(address, p_stats, rw, L1, NO_PREFETCH);
+		//If miss in L2 cache
+		if (hit==0){
+			//Add to L2 cache if miss in both cache
+			addToCache(address, p_stats, rw, L2, NO_PREFETCH);
+
+			//Prefetch anything else
+			prefetch(address, p_stats);
+		}
+	}
+}
+
+/**
+ * Subroutine for cleaning up any outstanding memory operations and calculating overall statistics
+ * such as miss rate or average access time.
+ *
+ * @p_stats Pointer to the statistics structure
+ */
+void complete_cache(cache_stats_t *p_stats) {
+	double HT1, HT2 = 0;			//Variables for AAT
+	double MP1 = 0;
+	double MP2 = 500.0;
+	double MR1, MR2 = 0;
+
+	//Free memory associated with L1 cache
+	free(tagC1);
+	free(ageC1);
+	free(validC1);
+	free(dirtyC1);
+	//Free memory associated with L2 cache
+	free(tagC2);
+	free(ageC2);
+	free(validC2);
+	free(dirtyC2);
+
+	//Calculate AAT
+	MR1 = (double)(p_stats->L1_read_misses + p_stats->L1_write_misses)/p_stats->L1_accesses;
+	MR2 = (double)(p_stats->L2_read_misses + p_stats->L2_write_misses)/p_stats->L2_accesses;
+	HT1 = 2 + 0.2*s1;
+	HT2 = 4 + 0.4*s2;
+	MP1 = HT2 + MR2*MP2;
+	p_stats->avg_access_time = HT1 + MR1 * MP1;
 }
 
 /**
@@ -293,7 +367,6 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache, int
 	tag[indexAdded] = tagC;
 }
 
-
 /**
  * Subroutine that performs prefetching.
  *
@@ -301,16 +374,8 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache, int
  * @p_stats Pointer to the statistics structure
  */
 void prefetch(uint64_t address, cache_stats_t* p_stats){
-	int i,j = 0;
+	int i = 0;
 	int64_t d = 0;		//stride between misses
-	int brought = 0;	//flag for bringin in
-	//L2 parameters
-	uint64_t indexForC2 = (address>>b2)&(uint64_t(pow(2,c2-b2-s2)-1));		//Index into cache
-	uint64_t tagForC2 = address>>(c2-s2);										//Tag for cache
-	uint64_t incrementC2 = pow(2,c2-b2-s2);			//Increment between items in same set
-
-	//For storing LRU
-	int indexOld = 0;
 
 	//Store initial miss if never missed before
 	if (prev_miss == -1){
@@ -321,95 +386,24 @@ void prefetch(uint64_t address, cache_stats_t* p_stats){
 	//Calculate stride
 	d = (address>>b2) - prev_miss;
 
-	prev_miss = address>>b2;		//store new miss
+	//store new miss
+	prev_miss = address>>b2;		
+
 	if (d != pending_stride){
 		pending_stride = d;
 		return;
 	}
-	pending_stride = d;				//set stride
+
+	//set stride
+	pending_stride = d;				
 
 	//Perform prefetching
-	for (j=1; j<=k; j++){
-		p_stats->prefetched_blocks++;	//update stats
-				address = address + pending_stride*pow(2,b2);
-
+	for (i=1; i<=k; i++){
+		//update stats
+		p_stats->prefetched_blocks++;	
+		//Calculate address to be prefetched
+		address = address + pending_stride*pow(2,b2);
 		//Add to L2 cache for prefetching
 		addToCache(address, p_stats, READ, L2, PREFETCH);
 	}
-
-
-}
-
-/**
- * Subroutine that simulates the cache one trace event at a time.
- *
- * @rw The type of event. Either READ or WRITE
- * @address  The target memory address
- * @p_stats Pointer to the statistics structure
- */
-void cache_access(char rw, uint64_t address, cache_stats_t* p_stats) {
-	int hit = 0;			//flag for hits
-
-	//Increment number of accesses
-	p_stats->accesses++;		
-	//Check if read or write was done
-	if (rw==READ){
-		p_stats->reads++;
-	}else{
-		p_stats->writes++;
-	}
-
-	//Check if address in L1 cache
-	hit = checkCache(address, p_stats, rw, L1);
-	//If there is no hit check L2 cache
-	if (hit == 0){
-		hit = checkCache(address, p_stats, rw, L2);
-	}
-
-	//If there is a miss in the caches
-	if (hit != 1){
-		//Add to L1 cache
-		addToCache(address, p_stats, rw, L1, NO_PREFETCH);
-		//If miss in L2 cache
-		if (hit==0){
-			//Add to L2 cache if miss in both cache
-			addToCache(address, p_stats, rw, L2, NO_PREFETCH);
-
-			//Prefetch anything else
-			prefetch(address, p_stats);
-		}
-	}
-}
-
-
-/**
- * Subroutine for cleaning up any outstanding memory operations and calculating overall statistics
- * such as miss rate or average access time.
- *
- * @p_stats Pointer to the statistics structure
- */
-void complete_cache(cache_stats_t *p_stats) {
-	double HT1, HT2 = 0;			//Variables for AAT
-	double MP1 = 0;
-	double MP2 = 500.0;
-	double MR1, MR2 = 0;
-
-	//Free memory associated with L1 cache
-	free(tagC1);
-	free(ageC1);
-	free(validC1);
-	free(dirtyC1);
-	//Free memory associated with L2 cache
-	free(tagC2);
-	free(ageC2);
-	free(validC2);
-	free(dirtyC2);
-
-	//Calculate AAT
-	MR1 = (double)(p_stats->L1_read_misses + p_stats->L1_write_misses)/p_stats->L1_accesses;
-	MR2 = (double)(p_stats->L2_read_misses + p_stats->L2_write_misses)/p_stats->L2_accesses;
-	HT1 = 2 + 0.2*s1;
-	HT2 = 4 + 0.4*s2;
-	MP1 = HT2 + MR2*MP2;
-	p_stats->avg_access_time = HT1 + MR1 * MP1;
 }
