@@ -7,10 +7,8 @@
 
 //Functions for interacting with cache
 void prefetch(uint64_t, cache_stats_t*);
-int checkL1(uint64_t, cache_stats_t*, int);
-int checkL2(uint64_t, cache_stats_t*, int);
 int checkCache(uint64_t, cache_stats_t*, int, int);
-void addToCache(uint64_t, cache_stats_t*, int, int);
+void addToCache(uint64_t, cache_stats_t*, int, int, int);
 
 //Cache pieces
 uint64_t* tagC1;		//Store Tags 
@@ -39,7 +37,9 @@ uint64_t pending_stride = -1;
 //Which cache
 #define L1  1
 #define L2  2
-
+//Prefectch
+#define NO_PREFETCH  0
+#define PREFETCH     1
 /**
  * Subroutine for initializing the cache. You many add and initialize any global or heap
  * variables as needed.
@@ -86,93 +86,6 @@ void setup_cache(uint64_t in_c1, uint64_t in_b1, uint64_t in_s1, uint64_t in_c2,
 
 }
 
-/**
- * Subroutine that performs prefetching.
- *
- * @address  The target memory address
- */
-void prefetch(uint64_t address, cache_stats_t* p_stats){
-	int i,j = 0;
-	int64_t d = 0;		//stride between misses
-	int brought = 0;	//flag for bringin in
-	//L2 parameters
-	uint64_t indexForC2 = (address>>b2)&(uint64_t(pow(2,c2-b2-s2)-1));		//Index into cache
-	uint64_t tagForC2 = address>>(c2-s2);										//Tag for cache
-	uint64_t incrementC2 = pow(2,c2-b2-s2);			//Increment between items in same set
-
-	//For storing LRU
-	int indexOld = 0;
-
-	//Store initial miss if never missed before
-	if (prev_miss == -1){
-		prev_miss = (address>>b2);
-		return;
-	}
-
-	//Calculate stride
-	d = (address>>b2) - prev_miss;
-
-	prev_miss = address>>b2;		//store new miss
-	if (d != pending_stride){
-		pending_stride = d;
-		return;
-	}
-	pending_stride = d;				//set stride
-
-	//Perform prefetching
-	for (j=1; j<=k; j++){
-		p_stats->prefetched_blocks++;	//update stats
-
-		//Calculate address to prefetch
-		address = address + pending_stride*pow(2,b2);
-	 	indexForC2 = (address>>b2)&(uint64_t(pow(2,c2-b2-s2)-1));		//Index into cache
-		tagForC2 = address>>(c2-s2);										//Tag for cache
-		incrementC2 = pow(2,c2-b2-s2);			//Increment between items in same set
-
-		indexOld = indexForC2;
-		//Try to find cache slot with oldest item
-		for (i=0; i<pow(2,s2); i++){
-			//Look for the oldest item in case of removing LRU
-			if (validC2[indexForC2 + incrementC2*i] == 1 && (ageC2[indexForC2 + incrementC2*i] < ageC2[indexOld])){
-				indexOld = indexForC2 + incrementC2*i;
-			}
-		}
-
-		//Try to find cache slot with invalid item
-		for (i=0; i<pow(2,s2); i++){
-			if (validC2[indexForC2 + incrementC2*i] == 0){
-				brought = 1;			//if found, mark as a hit
-
-				//Set up timestamp
-				ageC2[indexForC2 + incrementC2*i]  = ageC2[indexOld] -1 ;
-
-				//Set up info
-				validC2[indexForC2 + incrementC2*i] = 1;
-				dirtyC2[indexForC2 + incrementC2*i] = 0;
-				//Put tag into cache
-				tagC2[indexForC2 + incrementC2*i] = tagForC2;
-				break;
-			}
-
-		}
-			//If all items valid, removed LRU
-		if (brought == 0){
-			brought = 1;			//if found, mark as a hit
-
-			//Set up timestamp
-			ageC2[indexOld]  = ageC2[indexOld] -1 ;
-
-			//Set up info
-			validC2[indexOld] = 1;
-			dirtyC2[indexOld] = 0;
-
-			//Put tag into cache
-			tagC2[indexOld] = tagForC2;
-		}
-	}
-
-
-}
 /**
  * Subroutine that looks through caches.
  *
@@ -233,18 +146,15 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 			}else if (cache==L2){
 				hit = 2;
 			}
-
 			//Set up timestamp
 			gettimeofday(&tv,NULL);
 			age[indexC + incrementC*i]  = tv.tv_sec*1000000+tv.tv_usec;
-
 			//Change dirty bit based on read or write
 			if (rw == WRITE){
 				dirty[indexC + incrementC*i]=1;		//Mark as dirty
 			}else{
 				dirty[indexC + incrementC*i]=0;		//Mark as not dirty				
-			}
-			
+			}	
 			break;		//break if found
 		}
 	}
@@ -277,7 +187,7 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
  * @rw The type of event. Either READ or WRITE
  * @cache The cache. Either L1 or L2
  */
-void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache){
+void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache, int prefetch){
 	int i;
 	//Cache parameters
 	int c,b,s;
@@ -290,6 +200,7 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache){
 	uint64_t incrementC;				//Increment between items in same set
 	//Cache Access
 	int indexOld;				//LRU 
+	int indexPrefetch;
 	int brought = 0;			//Flag for bringin into cache
 	int indexAdded;
 	//Struct for time stamps
@@ -319,17 +230,27 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache){
 	tagC = address>>(c-s);									//Tag for cache
 	incrementC = pow(2,c-b-s);								//Increment between items in same set
 
-	indexOld = indexC;										//Initialize LRU
+	//Find oldest item if prefetching
+	if (prefetch == PREFETCH){
+		indexPrefetch = indexC;
+		//Try to find cache slot with oldest item
+		for (i=0; i<pow(2,s); i++){
+			//Look for the oldest item for timing purposes
+			if (valid[indexC + incrementC*i] == 1 && (age[indexC + incrementC*i] < age[indexPrefetch])){
+				indexPrefetch = indexC + incrementC*i;
+			}
+		}
+	}
+
+	indexOld = indexC;				//Initialize LRU
 
 	//Try to find cache slot with invalid item
 	for (i=0; i<pow(2,s); i++){
 		//Check if item is invalid
 		if (valid[indexC + incrementC*i] == 0){
 			brought = 1;			//if found, mark as a hit
-
 			//Index added to
-			indexAdded = indexC + incrementC*i;
-				
+			indexAdded = indexC + incrementC*i;		
 			break;
 		}
 
@@ -337,27 +258,29 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache){
 		if (age[indexC + incrementC*i] < age[indexOld]){
 			indexOld = indexC + incrementC*i;
 		}
-
 	}
 	
 	//If all items valid, removed LRU
 	if (brought == 0){
 		brought = 1;					//set flag that brough in
-
 		//Check if need to do writeback
 		if (dirty[indexOld] == 1){
 			p_stats->write_backs++;
 		}
-
 		//Index to add to
 		indexAdded = indexOld;
-
 	}
 
 	//Set up data for added item
 	//Set up timestamp
-	gettimeofday(&tv,NULL);
-	age[indexAdded]  = tv.tv_sec*1000000+tv.tv_usec;
+	if (prefetch == PREFETCH){
+		//If prefetch set timestamp to older than oldest
+		age[indexAdded] = age[indexPrefetch] - 1;
+	}else{
+		//Set up timestamp
+		gettimeofday(&tv,NULL);
+		age[indexAdded]  = tv.tv_sec*1000000+tv.tv_usec;
+	}
 	//Set up valid bit
 	valid[indexAdded] = 1;
 	//Change dirty bit based on read or write
@@ -368,6 +291,53 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache){
 	}
 	//Put tag into cache
 	tag[indexAdded] = tagC;
+}
+
+
+/**
+ * Subroutine that performs prefetching.
+ *
+ * @address  The target memory address
+ * @p_stats Pointer to the statistics structure
+ */
+void prefetch(uint64_t address, cache_stats_t* p_stats){
+	int i,j = 0;
+	int64_t d = 0;		//stride between misses
+	int brought = 0;	//flag for bringin in
+	//L2 parameters
+	uint64_t indexForC2 = (address>>b2)&(uint64_t(pow(2,c2-b2-s2)-1));		//Index into cache
+	uint64_t tagForC2 = address>>(c2-s2);										//Tag for cache
+	uint64_t incrementC2 = pow(2,c2-b2-s2);			//Increment between items in same set
+
+	//For storing LRU
+	int indexOld = 0;
+
+	//Store initial miss if never missed before
+	if (prev_miss == -1){
+		prev_miss = (address>>b2);
+		return;
+	}
+
+	//Calculate stride
+	d = (address>>b2) - prev_miss;
+
+	prev_miss = address>>b2;		//store new miss
+	if (d != pending_stride){
+		pending_stride = d;
+		return;
+	}
+	pending_stride = d;				//set stride
+
+	//Perform prefetching
+	for (j=1; j<=k; j++){
+		p_stats->prefetched_blocks++;	//update stats
+				address = address + pending_stride*pow(2,b2);
+
+		//Add to L2 cache for prefetching
+		addToCache(address, p_stats, READ, L2, PREFETCH);
+	}
+
+
 }
 
 /**
@@ -399,11 +369,11 @@ void cache_access(char rw, uint64_t address, cache_stats_t* p_stats) {
 	//If there is a miss in the caches
 	if (hit != 1){
 		//Add to L1 cache
-		addToCache(address, p_stats, rw, L1);
+		addToCache(address, p_stats, rw, L1, NO_PREFETCH);
 		//If miss in L2 cache
 		if (hit==0){
 			//Add to L2 cache if miss in both cache
-			addToCache(address, p_stats, rw, L2);
+			addToCache(address, p_stats, rw, L2, NO_PREFETCH);
 
 			//Prefetch anything else
 			prefetch(address, p_stats);
