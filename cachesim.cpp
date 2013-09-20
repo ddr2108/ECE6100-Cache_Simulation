@@ -35,9 +35,6 @@ uint64_t pending_stride = -1;
 #define NO_PREFETCH  0
 #define PREFETCH     1
 
-//int L1miss = 0;
-//int L2miss = 0;
-
 /**
  * Subroutine for initializing the cache. You many add and initialize any global or heap
  * variables as needed.
@@ -416,6 +413,7 @@ void prefetchCache(uint64_t address, cache_stats_t* p_stats){
 	//store new miss
 	prev_miss = address>>b2;		
 
+	//Check to see if should do a prefetch
 	if (d != pending_stride){
 		pending_stride = d;
 		return;
@@ -429,7 +427,7 @@ void prefetchCache(uint64_t address, cache_stats_t* p_stats){
 		//update stats
 		p_stats->prefetched_blocks++;	
 		//Calculate address to be prefetched
-		address = address + pending_stride*pow(2,b2);
+		address = address + (pending_stride<<b2);
 		//Add to L2 cache for prefetching
 		addToCache(address, p_stats, READ, L2, PREFETCH);
 	}
