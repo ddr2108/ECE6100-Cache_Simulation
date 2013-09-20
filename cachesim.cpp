@@ -25,8 +25,9 @@ uint64_t prev_miss = -1;
 uint64_t pending_stride = -1;
 
 //Cache action
-#define READ  'r'
-#define WRITE 'w'
+#define READ  		'r'
+#define WRITE 		'w'
+#define SET_DIRTY  	's'
 //Which cache
 #define L1  1
 #define L2  2
@@ -166,7 +167,7 @@ void complete_cache(cache_stats_t *p_stats) {
  *
  * @address  The target memory address
  * @p_stats Pointer to the statistics structure
- * @rw The type of event. Either READ or WRITE
+ * @rw The type of event. Either READ or WRITE or SET_DIRTY
  * @cache The cache. Either L1 or L2
  *
  * @return 1 if hit, 0 if not
@@ -224,41 +225,46 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 			}
 			//Index found at
 			indexFound = indexC + incrementC*i;
-
+			
 			//Set up timestamp
-			gettimeofday(&tv,NULL);
-			age[indexFound]  = tv.tv_sec*1000000+tv.tv_usec;
+			if (rw != SET_DIRTY){
+				gettimeofday(&tv,NULL);
+				age[indexFound]  = tv.tv_sec*1000000+tv.tv_usec;
+			}
 			//Change dirty bit based on read or write
-			if (rw == WRITE){
+			if (rw == WRITE || rw == SET_DIRTY){
 				dirty[indexFound]=1;		//Mark as dirty
 			}
 			break;		//break if found
 		}
 	}
 
-	//Update access stats
-	if (cache==L1){
-		p_stats->L1_accesses++;
-	}else if (cache==L2){
-		p_stats->L2_accesses++;
-	}
-	//Update misses stats
-	if (cache == L1 && rw==READ && hit == 0){
-		p_stats->L1_read_misses++;
-	}else if (cache == L2 && rw==READ && hit == 0){
-		p_stats->L2_read_misses++;
-	} else if (cache == L1 && rw==WRITE && hit == 0){
-		p_stats->L1_write_misses++;
-	}else if (cache == L2 && rw==WRITE && hit == 0){
-		p_stats->L2_write_misses++;
-	}
-	//Update prefetch stats
-	if (hit==2){
-		//If it was a prefetched item
-		if (prefetchC2[indexFound]==1){
-			p_stats->successful_prefetches++;
-			//No longer prefetched item
-			prefetchC2[indexFound]=0;
+	//Update stats if not just looking
+	if (rw != SET_DIRTY){
+		//Update access stats
+		if (cache==L1){
+			p_stats->L1_accesses++;
+		}else if (cache==L2){
+			p_stats->L2_accesses++;
+		}
+		//Update misses stats
+		if (cache == L1 && rw==READ && hit == 0){
+			p_stats->L1_read_misses++;
+		}else if (cache == L2 && rw==READ && hit == 0){
+			p_stats->L2_read_misses++;
+		} else if (cache == L1 && rw==WRITE && hit == 0){
+			p_stats->L1_write_misses++;
+		}else if (cache == L2 && rw==WRITE && hit == 0){
+			p_stats->L2_write_misses++;
+		}
+		//Update prefetch stats
+		if (hit==2){
+			//If it was a prefetched item
+			if (prefetchC2[indexFound]==1){
+				p_stats->successful_prefetches++;
+				//No longer prefetched item
+				prefetchC2[indexFound]=0;
+			}
 		}
 	}
 
@@ -352,13 +358,11 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache, int
 		//Index to add to
 		indexAdded = indexOld;
 		//Check if need to do writeback
-		if (dirty[indexAdded] == 1){
-			//p_stats->write_backs++;
-			if (cache==L1){
-				//L1miss++;
-			}else if (cache==L2){
-				p_stats->write_backs++;
-			}
+		if (dirty[indexAdded] == 1 && cache == L2){
+			p_stats->write_backs++;
+		}
+		if (dirty[indexAdded] == 1 && cache == L1 && checkCache((tag[indexAdded]<<(c-s))+(indexC<<b), p_stats, SET_DIRTY, L2) == 0){
+			p_stats->write_backs++;
 		}
 	}
 
