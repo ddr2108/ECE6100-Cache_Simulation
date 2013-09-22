@@ -118,7 +118,7 @@ void cache_access(char rw, uint64_t address, cache_stats_t* p_stats) {
 		//If miss in L2 cache
 		if (hit==0){
 			//Add to L2 cache if miss in both cache
-			addToCache(address, p_stats, rw, L2, NO_PREFETCH);
+			addToCache(address, p_stats, READ, L2, NO_PREFETCH);
 			//Prefetch anything else
 			prefetchCache(address, p_stats);
 		}
