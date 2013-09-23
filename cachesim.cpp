@@ -28,6 +28,8 @@ uint64_t pending_stride = -1;
 #define READ  		'r'
 #define WRITE 		'w'
 #define SET_DIRTY  	's'
+#define SEE  	'c'
+
 //Which cache
 #define L1  1
 #define L2  2
@@ -164,7 +166,7 @@ void complete_cache(cache_stats_t *p_stats) {
  *
  * @address  The target memory address
  * @p_stats Pointer to the statistics structure
- * @rw The type of event. Either READ or WRITE or SET_DIRTY
+ * @rw The type of event. Either READ or WRITE or SET_DIRTY or SEE
  * @cache The cache. Either L1 or L2
  *
  * @return 1 if hit, 0 if not
@@ -224,7 +226,7 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 			indexFound = indexC + incrementC*i;
 			
 			//Set up timestamp
-			if (rw != SET_DIRTY){
+			if (rw != SET_DIRTY && rw != SEE){
 				gettimeofday(&tv,NULL);
 				age[indexFound]  = tv.tv_sec*1000000+tv.tv_usec;
 			}
@@ -237,7 +239,7 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 	}
 
 	//Update stats if not just looking
-	if (rw != SET_DIRTY){
+	if (rw != SET_DIRTY && rw != SEE){
 		//Update access stats
 		if (cache==L1){
 			p_stats->L1_accesses++;
@@ -424,11 +426,14 @@ void prefetchCache(uint64_t address, cache_stats_t* p_stats){
 
 	//Perform prefetching
 	for (i=1; i<=k; i++){
-		//update stats
-		p_stats->prefetched_blocks++;	
 		//Calculate address to be prefetched
 		address = address + (pending_stride<<b2);
-		//Add to L2 cache for prefetching
-		addToCache(address, p_stats, READ, L2, PREFETCH);
+	
+		if (checkCache(address, p_stats, SEE, L2)==0){
+			//update stats
+			p_stats->prefetched_blocks++;	
+			//Add to L2 cache for prefetching
+			addToCache(address, p_stats, READ, L2, PREFETCH);
+		}
 	}
 }
