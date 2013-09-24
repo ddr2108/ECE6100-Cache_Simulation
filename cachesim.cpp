@@ -188,8 +188,6 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 	uint64_t indexC;					//Index into cache
 	uint64_t tagC;						//Tag for cache
 	uint64_t incrementC;				//Increment between items in same set
-	//Struct for time stamps
-	struct timeval tv;
 
 	//Adjust cache parameters based on the cache
 	if (cache==L1){
@@ -230,7 +228,6 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 			
 			//Set up timestamp
 			if (rw != SET_DIRTY && rw != SEE){
-				gettimeofday(&tv,NULL);
 				age[indexFound]  = p_stats->accesses;
 			}
 			//Change dirty bit based on read or write
@@ -299,8 +296,6 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache, int
 	int indexPrefetch;
 	int brought = 0;			//Flag for bringin into cache
 	int indexAdded;
-	//Struct for time stamps
-	struct timeval tv;
 
 	//Adjust cache parameters based on the cache
 	if (cache==L1){
@@ -378,12 +373,10 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache, int
 			age[indexAdded] = age[indexPrefetch] - 1;
 		}else{
 			//Set up timestamp
-			gettimeofday(&tv,NULL);
 			age[indexAdded]  = p_stats->accesses;
 		}
 	}else{
 		//Set up timestamp
-		gettimeofday(&tv,NULL);
 		age[indexAdded]  = p_stats->accesses;
 	}
 	//Set up valid bit
