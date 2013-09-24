@@ -28,7 +28,7 @@ uint64_t pending_stride = -1;
 #define READ  		'r'
 #define WRITE 		'w'
 #define SET_DIRTY  	's'
-#define SEE  	'c'
+#define SEE  		'c'
 
 //Which cache
 #define L1  1
@@ -78,11 +78,14 @@ void setup_cache(uint64_t in_c1, uint64_t in_b1, uint64_t in_s1, uint64_t in_c2,
 	for (i = 0; i<(int)pow(2,(c1-b1)); i++){
 		dirtyC1[i] = 0;
 		validC1[i] = 0;
+		ageC1[i] = 0;
 	}
 	for (i = 0; i<(int)pow(2,(c2-b2)); i++){
 		dirtyC2[i] = 0;
 		validC2[i] = 0;
 		prefetchC2[i] = 0;
+		ageC2[i] = 0;
+
 	}
 
 }
@@ -219,7 +222,7 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 			//Adjust value of hit based on which cache missed
 			if (cache==L1){
 				hit = 1;
-			}else if (cache==L2){
+			}else{
 				hit = 2;
 			}
 			//Index found at
@@ -228,10 +231,12 @@ int checkCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache) {
 			//Set up timestamp
 			if (rw != SET_DIRTY && rw != SEE){
 				gettimeofday(&tv,NULL);
-				age[indexFound]  = tv.tv_sec*1000000+tv.tv_usec;
+				age[indexFound]  = p_stats->accesses;
 			}
 			//Change dirty bit based on read or write
-			if (rw == WRITE || rw == SET_DIRTY){
+			if (rw == WRITE && cache == L1){
+				dirty[indexFound]=1;		//Mark as dirty
+			}else if (rw == SET_DIRTY){
 				dirty[indexFound]=1;		//Mark as dirty
 			}
 			break;		//break if found
@@ -369,11 +374,17 @@ void addToCache(uint64_t address, cache_stats_t* p_stats, int rw, int cache, int
 	//Set up timestamp
 	if (prefetch == PREFETCH){
 		//If prefetch set timestamp to older than oldest
-		age[indexAdded] = age[indexPrefetch] - 1;
+		if (valid[indexPrefetch]==1){
+			age[indexAdded] = age[indexPrefetch] - 1;
+		}else{
+			//Set up timestamp
+			gettimeofday(&tv,NULL);
+			age[indexAdded]  = p_stats->accesses;
+		}
 	}else{
 		//Set up timestamp
 		gettimeofday(&tv,NULL);
-		age[indexAdded]  = tv.tv_sec*1000000+tv.tv_usec;
+		age[indexAdded]  = p_stats->accesses;
 	}
 	//Set up valid bit
 	valid[indexAdded] = 1;
